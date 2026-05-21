@@ -1,0 +1,16 @@
+id_cliente,nome,email,cidade,estado
+1,Joao Silva,joao@email.com,Sao Paulo,SP
+2,Maria Santos,maria@email.com,Rio de Janeiro,RJ
+3,Pedro Oliveira,pedro@email.com,Belo Horizonte,MG
+4,Ana Costa,ana@email.com,Salvador,BA
+5,Carlos Souza,carlos@email.com,Fortaleza,CE
+6,Juliana Lima,juliana@email.com,Brasilia,DF
+7,Rafael Almeida,rafael@email.com,Curitiba,PR
+8,Fernanda Pereira,fernanda@email.com,Recife,PE
+9,Lucas Rodrigues,lucas@email.com,Porto Alegre,RS
+10,Mariana Barbosa,mariana@email.com,Manaus,AM
+11,Ricardo Carvalho,ricardo@email.com,Belem,PA
+12,Amanda Ferreira,amanda@email.com,Goiania,GO
+13,Bruno Costa,bruno@email.com,Sao Luis,MA
+14,Camila Rocha,camila@email.com,Natal,RN
+15,Diego Martins,diego@email.com,Campo Grande,MS

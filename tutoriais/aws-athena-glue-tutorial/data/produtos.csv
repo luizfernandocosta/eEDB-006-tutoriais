@@ -1,0 +1,11 @@
+id_produto,nome_produto,categoria,preco
+1,Smartphone X,Eletronicos,2500.00
+2,Notebook Pro,Eletronicos,4500.00
+3,Fone Bluetooth,Acessorios,150.00
+4,Teclado Mecanico,Acessorios,280.00
+5,Camiseta Algodao,Vestuario,79.90
+6,Calca Jeans,Vestuario,159.90
+7,Tenis Esportivo,Esportes,349.90
+8,Bola de Futebol,Esportes,89.90
+9,Livro Programacao,Livros,120.00
+10,Kindle,Eletronicos,350.00
