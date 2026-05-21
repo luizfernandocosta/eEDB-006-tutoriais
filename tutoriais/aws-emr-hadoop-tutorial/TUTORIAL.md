@@ -60,7 +60,7 @@ Seu computador                     AWS Cloud (us-east-1)
 
                         +-------+
                         |  S3   | <--- input/ (lorem.txt)
-                        |Bucket | <--- jars/ (wordcount.jar)
+                        |Bucket | <--- src/  (Java sources)
                         +---+---+
                             |
                     +-------+-------+
@@ -75,19 +75,19 @@ Seu computador                     AWS Cloud (us-east-1)
               +-----+------+  +-----------+
                     |
               Steps executados:
-              1. s3-dist-cp: S3 -> HDFS
-              2. WordCount MapReduce
-              3. s3-dist-cp: HDFS -> S3
+              1. Compilar Java -> JAR -> upload S3
+              2. Download JAR + s3-dist-cp input -> HDFS
+              3. WordCount MapReduce
+              4. copyToLocal + aws s3 cp output -> S3
 ```
 
 ### Fluxo de dados
 
 ```
-1. Upload:   Seu PC -> S3 (input/ + jars/)
-2. Step 1:   S3 input/ -> HDFS /input/     (s3-dist-cp)
-3. Step 2:   HDFS /input/ -> HDFS /output/  (WordCount MapReduce)
-4. Step 3:   HDFS /output/ -> S3 output/    (s3-dist-cp)
-5. Download: S3 output/ -> Seu PC
+1. Upload:   PC -> S3 (input/ + src/)
+2. Step 1:   Compilar Java sources no EMR -> JAR -> upload para S3 jars/
+3. Step 2:   Download JAR + s3-dist-cp input -> HDFS -> WordCount -> copyToLocal + aws s3 cp output
+4. Download: S3 output/ -> PC
 ```
 
 ---
@@ -465,13 +465,17 @@ resource "aws_s3_object" "wordcount_jar" {
 resource "aws_emr_cluster" "wordcount" {
   name          = "wordcount-emr-cluster"
   release_label = "emr-6.15.0"          # Versao do EMR (Hadoop 3.x)
-  applications  = ["Hadoop", "MapReduce"]
+  applications  = ["Hadoop"]            # NAO inclua "MapReduce" — causa ValidationException no EMR 6.15.0
+
+  log_uri = "s3://${aws_s3_bucket.emr_lab.id}/logs/"  # Logs dos steps no S3
 
   service_role = "EMR_DefaultRole"       # Role para o servico EMR
   ec2_attributes {
     key_name     = "vockey"              # Chave SSH
     service_role = "EMR_EC2_DefaultRole" # Role para as instancias EC2
   }
+
+  keep_job_flow_alive_when_no_steps = true  # Mantem cluster vivo apos steps
 
   master_instance_group {
     instance_type = "m4.large"           # Tipo da instancia master
@@ -487,31 +491,46 @@ resource "aws_emr_cluster" "wordcount" {
 
 #### Steps (jobs) do EMR
 
+> **AVISO**: NAO use `hadoop jar s3://...jar` diretamente dentro de `bash -c` no EMR. O Hadoop resolve `s3://` como caminho local (`/mnt/var/lib/hadoop/steps/<id>/s3:/...`). Sempre baixe o JAR para `/tmp/` primeiro com `aws s3 cp`.
+
+**Step 1 — Compilar Java no cluster** (necessario se nao compilou localmente):
+
 ```hcl
 step {
-  name = "Copy-input-data-from-S3-to-HDFS"
-  hadoop_jar_step {
-    jar  = "command-runner.jar"   # Utilitario do EMR
-    args = ["s3-dist-cp", "--src", "s3://.../input/", "--dest", "hdfs:///input/"]
-  }
-}
-
-step {
-  name = "Run-WordCount-MapReduce"
-  hadoop_jar_step {
-    jar  = "s3://.../jars/wordcount.jar"
-    args = ["hdfs:///input/", "hdfs:///output/wordcount/"]
-  }
-}
-
-step {
-  name = "Copy-output-from-HDFS-to-S3"
+  name = "Compile-WordCount-Java"
+  action_on_failure = "CONTINUE"
   hadoop_jar_step {
     jar  = "command-runner.jar"
-    args = ["s3-dist-cp", "--src", "hdfs:///output/wordcount/", "--dest", "s3://.../output/"]
+    args = [
+      "bash", "-c",
+      "set -e && HADOOP_CP=$(hadoop classpath) && mkdir -p /tmp/wordcount-build && cd /tmp/wordcount-build && aws s3 cp s3://${aws_s3_bucket.emr_lab.id}/src/ . --recursive && javac -classpath \"$HADOOP_CP\" -d . *.java && jar cf wordcount.jar *.class && aws s3 cp wordcount.jar s3://${aws_s3_bucket.emr_lab.id}/jars/wordcount.jar"
+    ]
   }
 }
 ```
+
+**Step 2 — WordCount completo** (copia entrada, roda job, copia saida):
+
+```hcl
+step {
+  name = "Run-WordCount-MapReduce"
+  action_on_failure = "CONTINUE"
+  hadoop_jar_step {
+    jar  = "command-runner.jar"
+    args = [
+      "bash", "-c",
+      "set -e && aws s3 cp s3://${aws_s3_bucket.emr_lab.id}/jars/wordcount.jar /tmp/wordcount.jar && s3-dist-cp --src s3://${aws_s3_bucket.emr_lab.id}/input/ --dest hdfs:///input/ && hadoop jar /tmp/wordcount.jar hdfs:///input/ hdfs:///output/wordcount/ && hdfs dfs -copyToLocal hdfs:///output/wordcount/ /tmp/output/ && aws s3 cp /tmp/output/ s3://${aws_s3_bucket.emr_lab.id}/output/ --recursive"
+    ]
+  }
+}
+```
+
+> **Por que este padrao?**
+> - `aws s3 cp ... /tmp/wordcount.jar` — baixa o JAR para disco local ANTES de rodar `hadoop jar`
+> - `s3-dist-cp` — copia entrada de S3 para HDFS (isso funciona bem na direcao S3→HDFS)
+> - `hadoop jar /tmp/wordcount.jar` — usa caminho local, nao S3
+> - `hdfs dfs -copyToLocal` + `aws s3 cp` — copia saida de HDFS para S3 (mais confiavel que `s3-dist-cp` HDFS→S3)
+> - `set -e` — falha imediatamente se qualquer comando falhar (evita step "COMPLETED" sem saida)
 
 > **s3-dist-cp**: Ferramenta otimizada do EMR para copiar dados entre S3 e HDFS. E como o `hdfs dfs -put`/`-get`, mas muito mais rapido para grandes volumes.
 
@@ -621,10 +640,9 @@ Se quiser submeter steps manualmente a um cluster ja existente:
 CLUSTER_ID=$(aws emr create-cluster \
     --name "wordcount-manual" \
     --release-label "emr-6.15.0" \
-    --applications Name=Hadoop Name=MapReduce \
+    --applications Name=Hadoop \
     --service-role "EMR_DefaultRole" \
-    --job-flow-role "EMR_EC2_DefaultRole" \
-    --ec2-attributes KeyName=vockey \
+    --ec2-attributes KeyName=vockey,InstanceProfile=EMR_EC2_DefaultRole \
     --instance-groups \
         '[{"InstanceGroupType":"MASTER","InstanceCount":1,"InstanceType":"m4.large","Name":"Master"},
           {"InstanceGroupType":"CORE","InstanceCount":1,"InstanceType":"m4.large","Name":"Core"}]' \
@@ -646,9 +664,11 @@ aws emr add-steps --cluster-id $CLUSTER_ID --steps \
 
 ### Submeter step: WordCount
 
+> **AVISO**: NAO passe `s3://...jar` diretamente como `Jar`. Dentro de `bash -c`, o Hadoop resolve `s3://` como caminho local. Use `command-runner.jar` com download previo.
+
 ```bash
 aws emr add-steps --cluster-id $CLUSTER_ID --steps \
-    '[{"Name":"WordCount","ActionOnFailure":"CONTINUE","HadoopJarStep":{"Jar":"s3://'${BUCKET}'/jars/wordcount.jar","Args":["hdfs:///input/","hdfs:///output/wordcount/"]}}]'
+    '[{"Name":"WordCount","ActionOnFailure":"CONTINUE","HadoopJarStep":{"Jar":"command-runner.jar","Args":["bash","-c","set -e && aws s3 cp s3://'${BUCKET}'/jars/wordcount.jar /tmp/wordcount.jar && s3-dist-cp --src s3://'${BUCKET}'/input/ --dest hdfs:///input/ && hadoop jar /tmp/wordcount.jar hdfs:///input/ hdfs:///output/wordcount/ && hdfs dfs -copyToLocal hdfs:///output/wordcount/ /tmp/output/ && aws s3 cp /tmp/output/ s3://'${BUCKET}'/output/ --recursive"]}}]'
 ```
 
 ### Submeter step: copiar HDFS -> S3
@@ -875,3 +895,8 @@ aws s3 ls | grep wordcount
 | `The security token included in the request is expired` | Credenciais expiradas | Re-execute `setup_aws_credentials.sh` |
 | S3 bucket already exists | Bucket com mesmo nome em outra conta | O nome inclui o Account ID para evitar conflitos |
 | Cluster termina automaticamente | Sessao do lab expirou | Resultados no S3 persistem. Recrie o cluster na proxima sessao |
+| `hadoop jar s3://...jar` falha com "JAR does not exist" | Dentro de `bash -c`, Hadoop resolve `s3://` como caminho local (`/mnt/var/lib/hadoop/steps/<id>/s3:/...`) | Baixe o JAR primeiro: `aws s3 cp s3://...jar /tmp/...jar` e use `hadoop jar /tmp/...jar` |
+| `--job-flow-role` parametro nao existe | Parametro removido no AWS CLI v2 | Use `--ec2-attributes InstanceProfile=EMR_EC2_DefaultRole` |
+| `ValidationException` com `MapReduce` application | `MapReduce` nao e aplicacao valida no EMR 6.15.0 | Use apenas `Name=Hadoop` (ou `["Hadoop"]` no Terraform) |
+| `s3-dist-cp` de HDFS para S3 falha silenciosamente | Bug intermitente do s3-dist-cp na direcao HDFS→S3 | Use `hdfs dfs -copyToLocal` + `aws s3 cp` para copiar saida |
+| Step COMPLETED mas sem saida no S3 | Comandos separados por `;` ignoram falhas | Use `&&` para encadear comandos (ou `set -e`) e detectar falhas |
