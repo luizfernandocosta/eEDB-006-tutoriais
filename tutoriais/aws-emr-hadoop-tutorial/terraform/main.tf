@@ -20,10 +20,6 @@ locals {
   bucket_name = "${data.aws_caller_identity.current.account_id}-emr-lab-wordcount"
 }
 
-# ---------------------------------------------------------------------------
-# S3 BUCKET
-# ---------------------------------------------------------------------------
-
 resource "aws_s3_bucket" "emr_lab" {
   bucket        = local.bucket_name
   force_destroy = true
@@ -35,10 +31,6 @@ resource "aws_s3_bucket" "emr_lab" {
   }
 }
 
-# ---------------------------------------------------------------------------
-# DADOS DE ENTRADA
-# ---------------------------------------------------------------------------
-
 resource "aws_s3_object" "input_data" {
   for_each = fileset("${path.module}/../data", "**")
 
@@ -47,10 +39,6 @@ resource "aws_s3_object" "input_data" {
   source = "${path.module}/../data/${each.value}"
   etag   = filemd5("${path.module}/../data/${each.value}")
 }
-
-# ---------------------------------------------------------------------------
-# FONTES JAVA (para compilacao no cluster)
-# ---------------------------------------------------------------------------
 
 resource "aws_s3_object" "java_sources" {
   for_each = fileset("${path.module}/../src", "**")
@@ -61,10 +49,6 @@ resource "aws_s3_object" "java_sources" {
   etag   = filemd5("${path.module}/../src/${each.value}")
 }
 
-# ---------------------------------------------------------------------------
-# BOOTSTRAP
-# ---------------------------------------------------------------------------
-
 resource "aws_s3_object" "bootstrap_script" {
   bucket = aws_s3_bucket.emr_lab.id
   key    = "scripts/bootstrap.sh"
@@ -74,16 +58,13 @@ resource "aws_s3_object" "bootstrap_script" {
   SCRIPT
 }
 
-# ---------------------------------------------------------------------------
-# CLUSTER EMR
-# ---------------------------------------------------------------------------
-
 resource "aws_emr_cluster" "wordcount" {
-  name          = "wordcount-emr-cluster"
-  release_label = "emr-6.15.0"
-  applications  = ["Hadoop"]
-
-  service_role = "EMR_DefaultRole"
+  name                              = "wordcount-emr-cluster"
+  release_label                     = "emr-6.15.0"
+  applications                      = ["Hadoop"]
+  service_role                      = "EMR_DefaultRole"
+  log_uri                           = "s3://${aws_s3_bucket.emr_lab.id}/logs/"
+  keep_job_flow_alive_when_no_steps = true
 
   ec2_attributes {
     key_name                          = "vockey"
@@ -96,25 +77,29 @@ resource "aws_emr_cluster" "wordcount" {
   master_instance_group {
     instance_type  = "m4.large"
     instance_count = 1
+    ebs_config {
+      size = "32"
+      type = "gp2"
+    }
   }
 
   core_instance_group {
     instance_type  = "m4.large"
     instance_count = 1
+    ebs_config {
+      size = "32"
+      type = "gp2"
+    }
   }
 
   bootstrap_action {
     path = "s3://${aws_s3_bucket.emr_lab.id}/scripts/bootstrap.sh"
-    name = "setup-hdfs-dirs"
+    name = "bootstrap"
   }
 
-  # -----------------------------------------------------------------------
-  # Step 1: Compilar Java no cluster (usa javac + hadoop classpath do EMR)
-  # -----------------------------------------------------------------------
   step {
-    name              = "Compile-WordCount-JAR"
+    name              = "Step1-Compile-JAR"
     action_on_failure = "TERMINATE_CLUSTER"
-
     hadoop_jar_step {
       jar  = "command-runner.jar"
       args = [
@@ -124,57 +109,35 @@ resource "aws_emr_cluster" "wordcount" {
     }
   }
 
-  # -----------------------------------------------------------------------
-  # Step 2: Copiar dados do S3 para HDFS
-  # -----------------------------------------------------------------------
   step {
-    name              = "Copy-input-to-HDFS"
+    name              = "Step2-Copy-Input-S3-to-HDFS"
     action_on_failure = "CONTINUE"
-
     hadoop_jar_step {
       jar  = "command-runner.jar"
       args = ["s3-dist-cp", "--src", "s3://${local.bucket_name}/input/", "--dest", "hdfs:///input/"]
     }
   }
 
-  # -----------------------------------------------------------------------
-  # Step 3: Executar WordCount MapReduce (command-runner para resolver args)
-  # -----------------------------------------------------------------------
   step {
-    name              = "Run-WordCount-MapReduce"
+    name              = "Step3-WordCount-MapReduce"
     action_on_failure = "CONTINUE"
-
-    hadoop_jar_step {
-      jar  = "command-runner.jar"
-      args = ["hadoop", "jar", "s3://${local.bucket_name}/jars/wordcount.jar", "WordCountApplication", "hdfs:///input/", "hdfs:///output/wordcount/"]
-    }
-  }
-
-  # -----------------------------------------------------------------------
-  # Step 4: Copiar resultados do HDFS para S3
-  # -----------------------------------------------------------------------
-  step {
-    name              = "Copy-output-to-S3"
-    action_on_failure = "CONTINUE"
-
-    hadoop_jar_step {
-      jar  = "command-runner.jar"
-      args = ["s3-dist-cp", "--src", "hdfs:///output/wordcount/", "--dest", "s3://${local.bucket_name}/output/"]
-    }
-  }
-
-  # -----------------------------------------------------------------------
-  # Step 5: Exibir resultados nos logs do step
-  # -----------------------------------------------------------------------
-  step {
-    name              = "Show-Results"
-    action_on_failure = "CONTINUE"
-
     hadoop_jar_step {
       jar  = "command-runner.jar"
       args = [
         "bash", "-c",
-        "echo '=== WordCount Results ==='; hdfs dfs -cat /output/wordcount/part-r-00000 2>/dev/null | sort -t$'\\t' -k2 -nr | head -20; echo '=== Total words ==='; hdfs dfs -cat /output/wordcount/part-r-00000 2>/dev/null | wc -l; echo '=== S3 Output ==='; aws s3 ls s3://${local.bucket_name}/output/"
+        "hadoop jar s3://${local.bucket_name}/jars/wordcount.jar WordCountApplication hdfs:///input/ hdfs:///output/wordcount/"
+      ]
+    }
+  }
+
+  step {
+    name              = "Step4-Copy-Output-HDFS-to-S3"
+    action_on_failure = "CONTINUE"
+    hadoop_jar_step {
+      jar  = "command-runner.jar"
+      args = [
+        "bash", "-c",
+        "hadoop fs -mkdir -p /tmp/wc-output && hadoop fs -cp /output/wordcount/* /tmp/wc-output/ && s3-dist-cp --src hdfs:///tmp/wc-output/ --dest s3://${local.bucket_name}/output/ && echo COPY_DONE"
       ]
     }
   }
@@ -192,10 +155,6 @@ resource "aws_emr_cluster" "wordcount" {
     ]
   }
 }
-
-# ---------------------------------------------------------------------------
-# OUTPUTS
-# ---------------------------------------------------------------------------
 
 output "cluster_id" {
   value = aws_emr_cluster.wordcount.id

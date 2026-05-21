@@ -536,7 +536,7 @@ aws glue create-table \
             "Location": "s3://'"${BUCKET}"'/data/clientes/",
             "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
             "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
-            "SerDeInfo": {
+            "SerdeInfo": {
                 "SerializationLibrary": "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
                 "Parameters": {
                     "skip.header.line.count": "1",
@@ -550,8 +550,7 @@ aws glue create-table \
                 {"Name": "cidade", "Type": "string"},
                 {"Name": "estado", "Type": "string"}
             ]
-        },
-        "TableType": "EXTERNAL_TABLE"
+        }
     }' \
     --region us-east-1
 ```
@@ -564,11 +563,10 @@ aws glue create-table \
 | `Location` | `s3://BUCKET/data/clientes/` | Onde os dados estao no S3 |
 | `InputFormat` | `TextInputFormat` | Formato de leitura (texto puro) |
 | `OutputFormat` | `HiveIgnoreKeyTextOutputFormat` | Formato de escrita |
-| `SerDeInfo.SerializationLibrary` | `LazySimpleSerDe` | Como serializar/deserializar o CSV |
-| `SerDeInfo.Parameters.field.delim` | `,` | Delimitador de colunas e virgula |
-| `SerDeInfo.Parameters.skip.header.line.count` | `1` | Pula a primeira linha (cabecalho) |
+| `SerdeInfo.SerializationLibrary` | `LazySimpleSerDe` | Como serializar/deserializar o CSV |
+| `SerdeInfo.Parameters.field.delim` | `,` | Delimitador de colunas e virgula |
+| `SerdeInfo.Parameters.skip.header.line.count` | `1` | Pula a primeira linha (cabecalho) |
 | `Columns` | lista de colunas | Schema da tabela: nome e tipo |
-| `TableType` | `EXTERNAL_TABLE` | Indica que os dados existem no S3 (nao gerenciado pelo Glue) |
 
 **Verificar:**
 ```bash
@@ -589,7 +587,7 @@ aws glue create-table \
             "Location": "s3://'"${BUCKET}"'/data/produtos/",
             "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
             "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
-            "SerDeInfo": {
+            "SerdeInfo": {
                 "SerializationLibrary": "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
                 "Parameters": {
                     "skip.header.line.count": "1",
@@ -602,8 +600,7 @@ aws glue create-table \
                 {"Name": "categoria", "Type": "string"},
                 {"Name": "preco", "Type": "double"}
             ]
-        },
-        "TableType": "EXTERNAL_TABLE"
+        }
     }' \
     --region us-east-1
 ```
@@ -627,7 +624,7 @@ aws glue create-table \
             "Location": "s3://'"${BUCKET}"'/data/vendas/",
             "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
             "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
-            "SerDeInfo": {
+            "SerdeInfo": {
                 "SerializationLibrary": "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
                 "Parameters": {
                     "skip.header.line.count": "1",
@@ -641,8 +638,7 @@ aws glue create-table \
                 {"Name": "quantidade", "Type": "int"},
                 {"Name": "data_venda", "Type": "string"}
             ]
-        },
-        "TableType": "EXTERNAL_TABLE"
+        }
     }' \
     --region us-east-1
 ```
@@ -705,9 +701,9 @@ aws athena start-query-execution \
         SELECT c.estado, p.categoria,
                round(SUM(v.quantidade * p.preco), 2) AS total_vendido,
                COUNT(*) AS num_vendas
-        FROM vendas v
-        JOIN clientes c ON v.id_cliente = c.id_cliente
-        JOIN produtos p ON v.id_produto = p.id_produto
+        FROM athena_lab.vendas v
+        JOIN athena_lab.clientes c ON v.id_cliente = c.id_cliente
+        JOIN athena_lab.produtos p ON v.id_produto = p.id_produto
         GROUP BY c.estado, p.categoria
         ORDER BY total_vendido DESC
     " \
