@@ -37,8 +37,8 @@ tutoriais/
 ### Opcao A: Script automatico (recomendado)
 
 ```bash
-chmod +x tutoriais/install_aws_pre_req/install.sh
-./tutoriais/install_aws_pre_req/install.sh
+chmod +x ./tutoriais/install_aws_pre_req_tutorial/install.sh
+./tutoriais/install_aws_pre_req_tutorial/install.sh
 ```
 
 O script detecta o SO e instala automaticamente.
